@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Vector Fury</title>
+    <style>
+        :root {
+            --retro-gray: #C0C0C0;
+            --retro-black: #000000;
+            --retro-white: #FFFFFF;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background-color: var(--retro-black);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'MS Sans Serif', 'Fixedsys', monospace;
+        }
+
+        /* The retro OS window frame */
+        .window-container {
+            width: 95vw;
+            height: 90vh;
+            max-width: 1200px;
+            max-height: 800px;
+            border: 3px solid var(--retro-gray);
+            box-shadow: 5px 5px 15px rgba(0,0,0,0.5);
+            background-color: var(--retro-black);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .title-bar {
+            background-color: var(--retro-gray);
+            color: var(--retro-black);
+            padding: 4px 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .window-controls {
+            display: flex;
+        }
+
+        .window-controls span {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            background-color: #e0e0e0;
+            border: 1px solid var(--retro-black);
+            margin-left: 3px;
+            text-align: center;
+            line-height: 14px;
+            font-weight: bold;
+            font-size: 12px;
+        }
+
+        .game-area {
+            flex-grow: 1;
+            position: relative;
+        }
+
+        #gameCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background-color: var(--retro-black);
+        }
+
+        /* Mobile On-Screen Controls */
+        .mobile-ui {
+            display: none; /* Hidden by default, shown via media query */
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none; /* Allows canvas clicks if needed */
+        }
+
+        .mobile-ui button {
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid var(--retro-white);
+            color: var(--retro-white);
+            border-radius: 50%;
+            width: 70px;
+            height: 70px;
+            font-size: 24px;
+            font-weight: bold;
+            -webkit-user-select: none; /* Safari */
+            -ms-user-select: none; /* IE 10+ */
+            user-select: none;
+            pointer-events: all; /* Buttons are clickable */
+        }
+        
+        .action-controls button {
+            width: 90px;
+            height: 70px;
+            border-radius: 15px;
+            font-size: 16px;
+        }
+
+        .movement-controls, .action-controls {
+            display: flex;
+            gap: 15px;
+        }
+
+        /* Media Query for mobile devices */
+        @media (hover: none) and (pointer: coarse) {
+            .mobile-ui {
+                display: flex;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .mobile-ui {
+                display: flex;
+            }
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="window-container">
+        <div class="title-bar">
+            <span>space fury</span>
+            <div class="window-controls">
+                <span>_</span>
+                <span>&#9633;</span>
+                <span>X</span>
+            </div>
+        </div>
+        <div class="game-area">
+            <canvas id="gameCanvas"></canvas>
+        </div>
+    </div>
+
+    <!-- On-Screen Controls for Mobile -->
+    <div class="mobile-ui">
+        <div class="movement-controls">
+            <button id="rotate-left">&lt;</button>
+            <button id="rotate-right">&gt;</button>
+        </div>
+        <div class="action-controls">
+            <button id="thrust">THRUST</button>
+            <button id="fire">FIRE</button>
+        </div>
+    </div>
+
+    <script>
+        // --- PRD Section 4: Game Configuration ---
+        const CONFIG = {
+            ship: {
+                rotationSpeed: 0.07, // radians per update
+                thrustAmount: 0.1,
+                friction: 0.99,
+                collisionRadius: 10,
+                bulletCooldown: 200, // milliseconds
+                size: 15,
+            },
+            bullet: {
+                speed: 7,
+                lifespan: 60, // frames
+                radius: 2,
+            },
+            asteroid: {
+                initialCount: 8,
+                maxCount: 15,
+                sizes: {
+                    large: { radius: 50, speed: 0.8, points: 20 },
+                    medium: { radius: 25, speed: 1.2, points: 50 },
+                    small: { radius: 12, speed: 1.8, points: 100 },
+                },
+            },
+        };
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let ship;
+        let asteroids = [];
+        let bullets = [];
+        let lastShotTime = 0;
+        let isGameOver = false;
+
+        // --- PRD Section 3 & 5: Core Classes & Logic ---
+
+        class Ship {
+            constructor() {
+                this.x = canvas.width / 2;
+                this.y = canvas.height / 2;
+                this.radius = CONFIG.ship.size;
+                this.angle = -Math.PI / 2; // Pointing up
+                this.velocity = { x: 0, y: 0 };
+                this.isThrusting = false;
+                this.isRotatingLeft = false;
+                this.isRotatingRight = false;
+            }
+
+            rotate() {
+                if (this.isRotatingLeft) this.angle -= CONFIG.ship.rotationSpeed;
+                if (this.isRotatingRight) this.angle += CONFIG.ship.rotationSpeed;
+            }
+
+            thrust() {
+                if (this.isThrusting) {
+                    this.velocity.x += Math.cos(this.angle) * CONFIG.ship.thrustAmount;
+                    this.velocity.y += Math.sin(this.angle) * CONFIG.ship.thrustAmount;
+                }
+            }
+
+            shoot() {
+                const now = Date.now();
+                if (!isGameOver && now - lastShotTime > CONFIG.ship.bulletCooldown) {
+                    bullets.push(new Bullet(this.x, this.y, this.velocity, this.angle));
+                    lastShotTime = now;
+                }
+            }
+
+            update() {
+                this.rotate();
+                this.thrust();
+
+                // Apply friction
+                this.velocity.x *= CONFIG.ship.friction;
+                this.velocity.y *= CONFIG.ship.friction;
+
+                // Update position
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+
+                handleScreenWrap(this);
+            }
+
+            draw() {
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                // Nose of the ship
+                ctx.moveTo(
+                    this.x + this.radius * Math.cos(this.angle),
+                    this.y + this.radius * Math.sin(this.angle)
+                );
+                // Left corner
+                ctx.lineTo(
+                    this.x + this.radius * Math.cos(this.angle + (Math.PI * 0.8)),
+                    this.y + this.radius * Math.sin(this.angle + (Math.PI * 0.8))
+                );
+                // Right corner
+                ctx.lineTo(
+                    this.x + this.radius * Math.cos(this.angle - (Math.PI * 0.8)),
+                    this.y + this.radius * Math.sin(this.angle - (Math.PI * 0.8))
+                );
+                ctx.closePath();
+                ctx.stroke();
+
+                // Center circle on base
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+
+        class Bullet {
+            constructor(x, y, shipVelocity, angle) {
+                this.x = x + CONFIG.ship.size * Math.cos(angle);
+                this.y = y + CONFIG.ship.size * Math.sin(angle);
+                this.radius = CONFIG.bullet.radius;
+                this.lifespan = CONFIG.bullet.lifespan;
+                this.velocity = {
+                    x: shipVelocity.x + Math.cos(angle) * CONFIG.bullet.speed,
+                    y: shipVelocity.y + Math.sin(angle) * CONFIG.bullet.speed,
+                };
+            }
+
+            update() {
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+                this.lifespan--;
+                handleScreenWrap(this);
+            }
+
+            draw() {
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        class Asteroid {
+            constructor(x, y, size) {
+                this.size = size;
+                const sizeConfig = CONFIG.asteroid.sizes[size];
+                this.radius = sizeConfig.radius;
+                
+                this.x = x !== undefined ? x : (Math.random() < 0.5 ? 0 - this.radius : canvas.width + this.radius);
+                this.y = y !== undefined ? y : (Math.random() < 0.5 ? 0 - this.radius : canvas.height + this.radius);
+
+                const angle = Math.random() * Math.PI * 2;
+                this.velocity = {
+                    x: Math.cos(angle) * sizeConfig.speed,
+                    y: Math.sin(angle) * sizeConfig.speed,
+                };
+            }
+
+            update() {
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+                handleScreenWrap(this);
+            }
+
+            draw() {
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            break() {
+                let newAsteroids = [];
+                if (this.size === 'large') {
+                    newAsteroids.push(new Asteroid(this.x, this.y, 'medium'));
+                    newAsteroids.push(new Asteroid(this.x, this.y, 'medium'));
+                } else if (this.size === 'medium') {
+                    newAsteroids.push(new Asteroid(this.x, this.y, 'small'));
+                    newAsteroids.push(new Asteroid(this.x, this.y, 'small'));
+                }
+                return newAsteroids;
+            }
+        }
+
+        function handleScreenWrap(obj) {
+            if (obj.x > canvas.width + obj.radius) obj.x = -obj.radius;
+            if (obj.x < -obj.radius) obj.x = canvas.width + obj.radius;
+            if (obj.y > canvas.height + obj.radius) obj.y = -obj.radius;
+            if (obj.y < -obj.radius) obj.y = canvas.height + obj.radius;
+        }
+
+        function checkCollisions() {
+            // Bullet-Asteroid collisions
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                for (let j = asteroids.length - 1; j >= 0; j--) {
+                    if (distance(bullets[i].x, bullets[i].y, asteroids[j].x, asteroids[j].y) < asteroids[j].radius) {
+                        const newAsteroids = asteroids[j].break();
+                        asteroids.splice(j, 1);
+                        bullets.splice(i, 1);
+                        asteroids.push(...newAsteroids);
+                        break; // Bullet is gone, move to next bullet
+                    }
+                }
+            }
+
+            // Ship-Asteroid collisions
+            if (!isGameOver) {
+                for (let i = asteroids.length - 1; i >= 0; i--) {
+                    if (distance(ship.x, ship.y, asteroids[i].x, asteroids[i].y) < asteroids[i].radius + ship.radius / 2) {
+                        gameOver();
+                    }
+                }
+            }
+        }
+
+        function distance(x1, y1, x2, y2) {
+            return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            ship.isThrusting = false; // Stop thrust sound on death
+            // Simple restart for now
+            setTimeout(init, 2000);
+        }
+        
+        // --- Game Initialization & Loop ---
+
+        function init() {
+            isGameOver = false;
+            ship = new Ship();
+            asteroids = [];
+            bullets = [];
+            for (let i = 0; i < CONFIG.asteroid.initialCount; i++) {
+                asteroids.push(new Asteroid(undefined, undefined, 'large'));
+            }
+        }
+
+        function gameLoop() {
+            requestAnimationFrame(gameLoop);
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (!isGameOver) {
+                ship.update();
+                ship.draw();
+            } else {
+                ctx.fillStyle = 'white';
+                ctx.font = '40px monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+            }
+
+            bullets.forEach((bullet, index) => {
+                bullet.update();
+                bullet.draw();
+                if (bullet.lifespan <= 0) bullets.splice(index, 1);
+            });
+
+            asteroids.forEach(asteroid => {
+                asteroid.update();
+                asteroid.draw();
+            });
+
+            checkCollisions();
+        }
+
+        // --- Event Listeners & Responsiveness ---
+
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            if (ship) { // Reposition ship if game is running
+                ship.x = canvas.width / 2;
+                ship.y = canvas.height / 2;
+            }
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        
+        // ** CORRECTED UNIFIED CONTROL SCHEME **
+        // Keyboard controls
+        window.addEventListener('keydown', (e) => {
+            if (!ship) return;
+            const key = e.key.toLowerCase();
+            switch (key) {
+                case 'arrowleft': case 'a': ship.isRotatingLeft = true; break;
+                case 'arrowright': case 'd': ship.isRotatingRight = true; break;
+                case 'arrowup': case 'w': ship.isThrusting = true; break;
+                case ' ': ship.shoot(); break;
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (!ship) return;
+            const key = e.key.toLowerCase();
+            switch (key) {
+                case 'arrowleft': case 'a': ship.isRotatingLeft = false; break;
+                case 'arrowright': case 'd': ship.isRotatingRight = false; break;
+                case 'arrowup': case 'w': ship.isThrusting = false; break;
+            }
+        });
+
+        // Touch controls
+        function setupTouchControls() {
+            const leftBtn = document.getElementById('rotate-left');
+            const rightBtn = document.getElementById('rotate-right');
+            const thrustBtn = document.getElementById('thrust');
+            const fireBtn = document.getElementById('fire');
+
+            const startAction = (action) => (e) => { e.preventDefault(); if (ship) action(true); };
+            const endAction = (action) => (e) => { e.preventDefault(); if (ship) action(false); };
+
+            leftBtn.addEventListener('touchstart', startAction(val => ship.isRotatingLeft = val));
+            leftBtn.addEventListener('touchend', endAction(val => ship.isRotatingLeft = val));
+            
+            rightBtn.addEventListener('touchstart', startAction(val => ship.isRotatingRight = val));
+            rightBtn.addEventListener('touchend', endAction(val => ship.isRotatingRight = val));
+
+            thrustBtn.addEventListener('touchstart', startAction(val => ship.isThrusting = val));
+            thrustBtn.addEventListener('touchend', endAction(val => ship.isThrusting = val));
+
+            fireBtn.addEventListener('touchstart', (e) => { e.preventDefault(); if (ship) ship.shoot(); });
+        }
+
+        // --- Start the Game ---
+        resizeCanvas();
+        init();
+        setupTouchControls();
+        gameLoop();
+
+    </script>
+</body>
+</html>
